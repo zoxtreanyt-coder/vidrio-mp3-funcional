@@ -1,0 +1,80 @@
+name: Compilar APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Instalar dependencias
+        run: npm install
+      - name: Preparar web
+        run: |
+          mkdir -p www
+          cp index.html www/index.html
+          cp node_modules/jsmediatags/dist/jsmediatags.min.js www/jsmediatags.min.js
+      - name: Crear proyecto Android
+        run: npx cap add android
+      - name: Agregar acceso nativo a la musica y la notificacion
+        run: |
+          mkdir -p android/app/src/main/java/com/vidrio/player
+          cp MusicLibPlugin.java MainActivity.java MediaService.java android/app/src/main/java/com/vidrio/player/
+
+          # Icono chico (nota musical) para la notificacion
+          mkdir -p android/app/src/main/res/drawable
+          cat > android/app/src/main/res/drawable/ic_stat_music.xml <<'XML'
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="24dp" android:height="24dp"
+              android:viewportWidth="24" android:viewportHeight="24">
+            <path android:fillColor="#FFFFFFFF"
+                android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z"/>
+          </vector>
+          XML
+
+          # Permisos y servicio de reproduccion en el AndroidManifest
+          python3 - <<'PY'
+          p = 'android/app/src/main/AndroidManifest.xml'
+          s = open(p, encoding='utf-8').read()
+          perms = [
+              '<uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />',
+              '<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />',
+              '<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />',
+              '<uses-permission android:name="android.permission.FOREGROUND_SERVICE" />',
+              '<uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />',
+              '<uses-permission android:name="android.permission.WAKE_LOCK" />',
+          ]
+          perms = [x for x in perms if x.split('"')[1] not in s]
+          service = '<service android:name="com.vidrio.player.MediaService" android:exported="false" android:foregroundServiceType="mediaPlayback" />'
+          assert '<application' in s and '</application>' in s, 'manifest inesperado'
+          if perms:
+              s = s.replace('<application', '\n    '.join(perms) + '\n    <application', 1)
+          if 'MediaService' not in s:
+              s = s.replace('</application>', '    ' + service + '\n    </application>', 1)
+          open(p, 'w', encoding='utf-8').write(s)
+          print('=== AndroidManifest.xml resultante ===')
+          print(s)
+          PY
+
+      - name: Sincronizar
+        run: npx cap sync android
+      - name: Compilar APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+      - name: Guardar APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: vidrio-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
